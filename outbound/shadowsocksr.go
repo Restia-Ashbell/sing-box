@@ -21,6 +21,7 @@ import (
 	N "github.com/sagernet/sing/common/network"
 
 	"github.com/Dreamacro/clash/transport/shadowsocks/core"
+	"github.com/Dreamacro/clash/transport/shadowsocks/shadowaead"
 	"github.com/Dreamacro/clash/transport/shadowsocks/shadowstream"
 	"github.com/Dreamacro/clash/transport/socks5"
 )
@@ -114,10 +115,16 @@ func (h *ShadowsocksR) DialContext(ctx context.Context, network string, destinat
 			return nil, err
 		}
 		conn = h.cipher.StreamConn(h.obfs.StreamConn(conn))
-		writeIv, err := conn.(*shadowstream.Conn).ObtainWriteIV()
-		if err != nil {
-			conn.Close()
-			return nil, err
+		var writeIv []byte
+		switch c := conn.(type) {
+		case *shadowstream.Conn:
+			writeIv, err = c.ObtainWriteIV()
+			if err != nil {
+				conn.Close()
+				return nil, err
+			}
+		case *shadowaead.Conn:
+			return nil, fmt.Errorf("invalid connection type")
 		}
 		conn = h.protocol.StreamConn(conn, writeIv)
 		err = M.SocksaddrSerializer.WriteAddrPort(conn, destination)
