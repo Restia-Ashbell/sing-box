@@ -13,17 +13,18 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing-box/transport/clashssr/obfs"
-	"github.com/sagernet/sing-box/transport/clashssr/protocol"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 
-	"github.com/Dreamacro/clash/transport/shadowsocks/core"
-	"github.com/Dreamacro/clash/transport/shadowsocks/shadowaead"
-	"github.com/Dreamacro/clash/transport/shadowsocks/shadowstream"
-	"github.com/Dreamacro/clash/transport/socks5"
+	EN "github.com/metacubex/mihomo/common/net"
+	"github.com/metacubex/mihomo/transport/shadowsocks/core"
+	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
+	"github.com/metacubex/mihomo/transport/shadowsocks/shadowstream"
+	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/metacubex/mihomo/transport/ssr/obfs"
+	"github.com/metacubex/mihomo/transport/ssr/protocol"
 )
 
 var _ adapter.Outbound = (*ShadowsocksR)(nil)
@@ -153,7 +154,7 @@ func (h *ShadowsocksR) ListenPacket(ctx context.Context, destination M.Socksaddr
 	if err != nil {
 		return nil, err
 	}
-	packetConn := h.cipher.PacketConn(bufio.NewUnbindPacketConn(outConn))
+	packetConn := h.cipher.PacketConn(EN.NewEnhancePacketConn(bufio.NewUnbindPacketConn(outConn)))
 	packetConn = h.protocol.PacketConn(packetConn)
 	packetConn = &ssPacketConn{packetConn, outConn.RemoteAddr()}
 	return packetConn, nil
@@ -168,7 +169,7 @@ func (h *ShadowsocksR) NewPacketConnection(ctx context.Context, conn N.PacketCon
 }
 
 type ssPacketConn struct {
-	net.PacketConn
+	EN.EnhancePacketConn
 	rAddr net.Addr
 }
 
@@ -177,11 +178,11 @@ func (spc *ssPacketConn) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	if err != nil {
 		return
 	}
-	return spc.PacketConn.WriteTo(packet[3:], spc.rAddr)
+	return spc.EnhancePacketConn.WriteTo(packet[3:], spc.rAddr)
 }
 
 func (spc *ssPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, _, e := spc.PacketConn.ReadFrom(b)
+	n, _, e := spc.EnhancePacketConn.ReadFrom(b)
 	if e != nil {
 		return 0, nil, e
 	}
@@ -198,4 +199,30 @@ func (spc *ssPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 
 	copy(b, b[len(addr):])
 	return n - len(addr), udpAddr, e
+}
+
+func (spc *ssPacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
+	data, put, _, err = spc.EnhancePacketConn.WaitReadFrom()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	_addr := socks5.SplitAddr(data)
+	if _addr == nil {
+		if put != nil {
+			put()
+		}
+		return nil, nil, nil, errors.New("parse addr error")
+	}
+
+	addr = _addr.UDPAddr()
+	if addr == nil {
+		if put != nil {
+			put()
+		}
+		return nil, nil, nil, errors.New("parse addr error")
+	}
+
+	data = data[len(_addr):]
+	return
 }
