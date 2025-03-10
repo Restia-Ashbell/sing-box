@@ -3,7 +3,6 @@ package shadowsocksr
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -20,11 +19,12 @@ import (
 
 	EN "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/transport/shadowsocks/core"
-	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowstream"
 	"github.com/metacubex/mihomo/transport/socks5"
 	"github.com/metacubex/mihomo/transport/ssr/obfs"
 	"github.com/metacubex/mihomo/transport/ssr/protocol"
+	shadowsocksM "github.com/metacubex/sing-shadowsocks2"
+	shadowstreamM "github.com/metacubex/sing-shadowsocks2/shadowstream"
 )
 
 func RegisterOutbound(registry *outbound.Registry) {
@@ -52,31 +52,26 @@ func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextL
 		dialer:     outboundDialer,
 		serverAddr: options.ServerOptions.Build(),
 	}
-	var cipher string
-	switch options.Method {
-	case "none":
-		cipher = "dummy"
-	default:
-		cipher = options.Method
-	}
-	outbound.cipher, err = core.PickCipher(cipher, nil, options.Password)
+	method, err := shadowsocksM.CreateMethod(ctx, options.Method, shadowsocksM.MethodOptions{Password: options.Password})
 	if err != nil {
 		return nil, err
 	}
+	pickCipher, ok := method.(core.Cipher)
+	if !ok {
+		return nil, E.New("ssr does not support AEAD encryption methods")
+	}
+	outbound.cipher = pickCipher
 	var (
 		ivSize int
 		key    []byte
 	)
-	if cipher == "dummy" {
-		ivSize = 0
+	if streamCipher, isStream := method.(*shadowstreamM.Method); isStream {
+		ivSize = streamCipher.IVSize()
+		key = streamCipher.Key()
+	} else if options.Method == "none" {
 		key = core.Kdf(options.Password, 16)
 	} else {
-		streamCipher, ok := outbound.cipher.(*core.StreamCipher)
-		if !ok {
-			return nil, fmt.Errorf("%s is not none or a supported stream cipher in ssr", cipher)
-		}
-		ivSize = streamCipher.IVSize()
-		key = streamCipher.Key
+		return nil, E.New("unsupported ssr method: ", options.Method)
 	}
 	obfs, obfsOverhead, err := obfs.PickObfs(options.Obfs, &obfs.Base{
 		Host:   options.Server,
@@ -114,15 +109,12 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		}
 		conn = h.cipher.StreamConn(h.obfs.StreamConn(conn))
 		var writeIv []byte
-		switch c := conn.(type) {
-		case *shadowstream.Conn:
+		if c, ok := conn.(*shadowstream.Conn); ok {
 			writeIv, err = c.ObtainWriteIV()
 			if err != nil {
 				conn.Close()
 				return nil, err
 			}
-		case *shadowaead.Conn:
-			return nil, fmt.Errorf("invalid connection type")
 		}
 		conn = h.protocol.StreamConn(conn, writeIv)
 		err = M.SocksaddrSerializer.WriteAddrPort(conn, destination)
