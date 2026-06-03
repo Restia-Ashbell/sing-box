@@ -4,7 +4,7 @@ import "C"
 
 import (
 	"context"
-	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -130,10 +130,14 @@ func BoxTest(Mode C.int, Address *C.char, Url *C.char, Timeout C.int, SpeedUrl *
 		if err == nil {
 			defer pc.Close()
 			_ = pc.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Millisecond))
-			dnsPacket, _ := hex.DecodeString("0000010000010000000000000377777706676f6f676c6503636f6d0000010001")
-			_, err = pc.Write(dnsPacket)
+			dnsQuery := []byte{
+				0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x03, 'w', 'w', 'w', 0x06, 'g', 'o', 'o', 'g', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00,
+				0x00, 0x01, 0x00, 0x01,
+			}
+			_, err = pc.Write(dnsQuery)
 			if err == nil {
-				var buf [1400]byte
+				var buf [512]byte
 				_, err = pc.Read(buf[:])
 			}
 		}
@@ -166,20 +170,8 @@ func BoxTest(Mode C.int, Address *C.char, Url *C.char, Timeout C.int, SpeedUrl *
 		}
 	}
 	if mode&IpTest != 0 {
-		getBetweenStr := func(str, start, end string) string {
-			n := strings.Index(str, start)
-			if n == -1 {
-				return ""
-			}
-			str = str[n+len(start):]
-			m := strings.Index(str, end)
-			if m == -1 {
-				return str
-			}
-			return str[:m]
-		}
+		var in_ip, out_ip, country string
 
-		var in_ip string
 		if host, _, err := net.SplitHostPort(address); err != nil {
 			in_ip = err.Error()
 		} else if ipaddr, err := net.ResolveIPAddr("ip", host); err != nil {
@@ -188,17 +180,27 @@ func BoxTest(Mode C.int, Address *C.char, Url *C.char, Timeout C.int, SpeedUrl *
 			in_ip = ipaddr.String()
 		}
 
-		var out_ip string
-		resp, err := httpClient.Get("https://www.cloudflare.com/cdn-cgi/trace")
+		resp, err := httpClient.Get("http://ip-api.com/json/")
 		if err == nil {
-			b, _ := io.ReadAll(resp.Body)
-			out_ip = getBetweenStr(string(b), "ip=", "\n")
-			resp.Body.Close()
+			defer resp.Body.Close()
+			var data map[string]any
+			json.NewDecoder(resp.Body).Decode(&data)
+			out_ip = data["query"].(string)
+			country = data["countryCode"].(string)
 		} else {
 			out_ip = err.Error()
 		}
 
-		results = append(results, "In: "+in_ip+" / Out: "+out_ip)
+		if len(country) == 2 {
+			// country code to flag emoji
+			// 'A' = 0x41 → 0x1F1E6
+			country = string([]rune{
+				rune(country[0]-'A') + 0x1F1E6,
+				rune(country[1]-'A') + 0x1F1E6,
+			})
+		}
+
+		results = append(results, in_ip+" → "+out_ip, country)
 	}
 	return C.CString(strings.Join(results, "\n"))
 }
