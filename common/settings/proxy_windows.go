@@ -25,7 +25,7 @@ func (p *WindowsSystemProxy) IsEnabled() bool {
 }
 
 func (p *WindowsSystemProxy) Enable() error {
-	err := wininet.SetSystemProxy("http://"+p.serverAddr.String(), "")
+	err := wininet.SetSystemProxy(p.serverAddr.String(), "")
 	if err != nil {
 		return err
 	}
